@@ -7,14 +7,39 @@ description: Build and edit Dify workflow DSL files. Use when creating new Dify 
 
 Build, edit, and validate Dify workflow DSL (Domain-Specific Language) files for creating AI-powered automation workflows.
 
+This skill is based on the Dify open-source platform's workflow engine, which powers both Workflow apps and Advanced Chat apps with a React Flow-based visual editor.
+
 ## Architecture Overview
 
 Dify workflows use a **queue-based, event-driven architecture** with:
+
+### Backend (Python - Execution Engine)
 - **GraphEngine**: Central orchestrator managing workflow execution
 - **WorkerPool**: Thread pool for parallel node execution
 - **VariablePool**: Centralized variable management across nodes
 - **EdgeProcessor**: Handles conditional routing and branch selection
 - **Graph Validator**: Ensures workflow integrity before execution
+
+### Frontend (React/TypeScript - Visual Editor)
+- **React Flow**: Canvas-based node graph editor
+- **Zustand Store**: State management for nodes, edges, and viewport
+- **WorkflowContext**: Provides workflow state to component tree
+- **BaseNode**: Common wrapper for all node types with handles, headers, and interactions
+- **Panel System**: Dynamic configuration panels for each node type
+- **Hook Injection Pattern**: Decouples UI from execution logic (draft sync, workflow run)
+
+### Integration Layer
+- **workflow**: Core canvas engine (generic React Flow implementation)
+- **workflow-app**: Application wrapper (business logic, API integration, lifecycle management)
+- **Draft Management**: Auto-save with debouncing and `sendBeacon` for safety
+  - Uses debounced sync to prevent excessive API calls
+  - Cancels pending syncs on unmount to avoid race conditions
+  - Tracks loaded state with `isWorkflowDataLoaded` flag
+- **Features System**: Optional features (file upload, speech-to-text, citations) integrated with workflow
+- **Trigger Status Management**: Separate store for tracking trigger node enable/disable state
+  - Trigger nodes can be enabled or disabled independently
+  - Status persists across workflow editor sessions
+  - Used for webhook, schedule, and plugin triggers
 
 ## Core Capabilities
 
@@ -34,7 +59,32 @@ Dify workflows use a **queue-based, event-driven architecture** with:
 - **External Integration**: http-request, tool, knowledge-retrieval, knowledge-index, datasource
 - **Advanced**: trigger-webhook, trigger-schedule, trigger-plugin, human-input
 
+**Edge Types and Connections**: See [references/edge_types.md](references/edge_types.md) for:
+- Source handle types (source, true/false, success-branch/fail-branch, loop)
+- Edge data properties and validation rules
+- Common connection patterns
+
+**Node Positioning**: See [references/node_positioning.md](references/node_positioning.md) for:
+- Canvas coordinate system and spacing guidelines
+- Layout patterns (linear, branching, error handling, iteration)
+- Position calculation formulas
+
+**Common Node Properties**: All nodes support these internal properties (prefixed with `_`):
+- `_runningStatus`: Current execution status (running, succeeded, failed)
+- `_connectedSourceHandleIds`/`_connectedTargetHandleIds`: Connection tracking
+- `_isSingleRun`: Single execution mode for debugging
+- `_isCandidate`: Phantom node during connection drag
+- `_children`: Child nodes for container types (iteration, loop)
+- `_iterationLength`/`_iterationIndex`: Iteration state tracking
+- `_loopLength`/`_loopIndex`: Loop state tracking
+- `_retryIndex`: Current retry attempt
+- `_waitingRun`: Queued for execution, human-input
+
 **Workflow Structure**: See [references/workflow_structure.md](references/workflow_structure.md) for complete DSL format
+
+**Edge Types**: See [references/edge_types.md](references/edge_types.md) for connection patterns and handle types
+
+**Node Positioning**: See [references/node_positioning.md](references/node_positioning.md) for layout guidelines
 
 **Templates**: Check [assets/](assets/) for example workflows
 
@@ -67,11 +117,21 @@ Use `scripts/generate_id.py` to create unique node IDs:
 python3 scripts/generate_id.py 5  # Generate 5 unique IDs
 ```
 
-Or generate in Python:
+Or generate in Python/JavaScript:
 ```python
+# Python
 import time
 node_id = str(int(time.time() * 1000))
 ```
+
+```javascript
+// JavaScript (used in Dify frontend)
+const nodeId = `${Date.now()}`
+```
+
+**Special ID patterns for container nodes**:
+- Iteration/Loop start nodes: `${parentNodeId}start`
+- Example: If iteration node ID is `1736668800000`, its start node ID is `1736668800000start`
 
 ### Step 4: Build the Workflow
 
@@ -172,6 +232,76 @@ Start → Loop → [Process Items] → Loop End → End
 
 Variables are managed in a centralized **VariablePool** and use the format: `{{#node_id.field_name#}}`
 
+### Variable Types (VarType)
+
+Dify supports these variable types for type-safe data flow:
+
+**Primitive Types**:
+- `string`: Text data
+- `number`: Floating-point numbers
+- `integer`: Whole numbers
+- `boolean`: true/false values
+- `secret`: Encrypted sensitive data (API keys, passwords)
+
+**Complex Types**:
+- `object`: JSON objects
+- `file`: Single file reference
+- `array`: Generic array
+- `array[string]`: Array of strings
+- `array[number]`: Array of numbers
+- `array[object]`: Array of objects
+- `array[boolean]`: Array of booleans
+- `array[file]`: Array of files
+- `array[any]`: Array of mixed types
+- `any`: Any type (use sparingly)
+
+**Special Types**:
+- `contexts`: Knowledge retrieval results
+- `iterator`: Iteration input variable
+- `loop`: Loop input variable
+
+### File Upload Configuration
+
+When using file input types (`file`, `files`, `file-list`), you can configure upload settings:
+
+**Default File Upload Settings**:
+```yaml
+allowed_file_upload_methods: ['local_file', 'remote_url']
+max_length: 5  # Maximum number of files
+allowed_file_types: ['image']  # Options: image, document, audio, video, custom
+allowed_file_extensions: []  # e.g., ['.pdf', '.docx']
+```
+
+**Upload Methods**:
+- `local_file`: Direct file upload from local system
+- `remote_url`: Upload file from URL
+
+**File Type Categories**:
+- `image`: Image files (JPG, PNG, GIF, etc.)
+- `document`: Document files (PDF, DOCX, TXT, etc.)
+- `audio`: Audio files (MP3, WAV, etc.)
+- `video`: Video files (MP4, AVI, etc.)
+- `custom`: Custom file types (specify extensions)
+
+### Input Variable Types (InputVarType)
+
+Start nodes use these input types for user-facing variables:
+
+- `text-input`: Single-line text input
+- `paragraph`: Multi-line text input
+- `select`: Dropdown selection
+- `number`: Numeric input
+- `checkbox`: Boolean checkbox
+- `url`: URL input with validation
+- `files`: Multiple file upload
+- `file`: Single file upload
+- `file-list`: Multiple file list
+- `json`: JSON input (object or array)
+- `json_object`: JSON object with schema validation
+- `contexts`: Knowledge retrieval context
+- `iterator`: Iteration variable
+- `loop`: Loop variable
+
 ### Variable Selector Pattern
 
 The variable pattern regex: `{{#[a-zA-Z0-9_]{1,50}(?:\.[a-zA-Z_][a-zA-Z0-9_]{0,29}){1,10}#}}`
@@ -180,6 +310,10 @@ The variable pattern regex: `{{#[a-zA-Z0-9_]{1,50}(?:\.[a-zA-Z_][a-zA-Z0-9_]{0,2
 - First element: node ID that produced the variable
 - Second element: variable name or output field
 - Additional elements: nested object keys or array indices (for FileSegment/ObjectSegment)
+
+**ValueSelector**: Array format used in DSL (e.g., `['1732007415808', 'text']`)
+- Represented as arrays in YAML: `value_selector: ['node_id', 'field_name']`
+- Converted to template syntax in prompts: `{{#node_id.field_name#}}`
 
 ### System Variables
 
@@ -197,14 +331,17 @@ Available via `sys` node ID:
 ### Common Output Fields by Node Type
 
 **LLM Node**:
-- `{{#node_id.text#}}` - Generated text response
-- `{{#node_id.usage#}}` - Token usage information
-- `{{#node_id.reasoning_content#}}` - Model reasoning (if enabled)
+- `{{#node_id.text#}}` - Generated text response (type: string)
+- `{{#node_id.usage#}}` - Token usage information (type: object)
+- `{{#node_id.reasoning_content#}}` - Model reasoning (if enabled) (type: string)
+
+**Agent Node**:
+- `{{#node_id.usage#}}` - Token usage information (type: object)
 
 **Code Node**:
 - `{{#node_id.output_name#}}` - Named outputs defined in node config
-- `{{#node_id.error_message#}}` - Error message (fail-branch only)
-- `{{#node_id.error_type#}}` - Error type (fail-branch only)
+- `{{#node_id.error_message#}}` - Error message (fail-branch only) (type: string)
+- `{{#node_id.error_type#}}` - Error type (fail-branch only) (type: string)
 
 **Start Node**:
 - `{{#node_id.variable_name#}}` - Input variables defined in start node
@@ -217,16 +354,67 @@ Available via `sys` node ID:
 - `{{#node_id.iteration#}}` - Current iteration number
 
 **HTTP Request Node**:
-- `{{#node_id.body#}}` - Response body
-- `{{#node_id.status_code#}}` - HTTP status code
-- `{{#node_id.headers#}}` - Response headers
-- `{{#node_id.files#}}` - Downloaded files (if response is file)
+- `{{#node_id.body#}}` - Response body (type: string)
+- `{{#node_id.status_code#}}` - HTTP status code (type: number)
+- `{{#node_id.headers#}}` - Response headers (type: object)
+- `{{#node_id.files#}}` - Downloaded files if response is file (type: array[file])
+
+**Tool Node**:
+- `{{#node_id.text#}}` - Tool output text (type: string)
+- `{{#node_id.files#}}` - Tool output files (type: array[file])
+- `{{#node_id.json#}}` - Tool output JSON (type: array[object])
 
 **Knowledge Retrieval Node**:
-- `{{#node_id.result#}}` - Retrieved knowledge segments
+- `{{#node_id.result#}}` - Retrieved knowledge segments (type: array[object])
+
+**Template Transform Node**:
+- `{{#node_id.output#}}` - Transformed output (type: string)
+
+**Question Classifier Node**:
+- `{{#node_id.class_name#}}` - Classification result (type: string)
+- `{{#node_id.usage#}}` - Token usage information (type: object)
+
+**Parameter Extractor Node**:
+- `{{#node_id.__is_success#}}` - Extraction success indicator (type: number)
+- `{{#node_id.__reason#}}` - Extraction failure reason (type: string)
+- `{{#node_id.__usage#}}` - Token usage information (type: object)
+- Plus custom extracted parameters defined in node config
 
 **Variable Aggregator**:
 - `{{#node_id.output#}}` - Aggregated output from merged branches
+
+**File Object Structure** (when file type is used):
+- `name` - File name (type: string)
+- `size` - File size in bytes (type: number)
+- `type` - File type category (type: string)
+- `extension` - File extension (type: string)
+- `mime_type` - MIME type (type: string)
+- `transfer_method` - Transfer method used (type: string)
+- `url` - File URL (type: string)
+- `related_id` - Related resource ID (type: string)
+
+**Knowledge Retrieval Result Structure**:
+```json
+{
+  "content": "",
+  "title": "",
+  "url": "",
+  "icon": "",
+  "metadata": {
+    "dataset_id": "",
+    "dataset_name": "",
+    "document_id": [],
+    "document_name": "",
+    "document_data_source_type": "",
+    "segment_id": "",
+    "segment_position": "",
+    "segment_word_count": "",
+    "segment_hit_count": "",
+    "segment_index_node_hash": "",
+    "score": ""
+  }
+}
+```
 
 ### Environment and Conversation Variables
 
@@ -262,6 +450,21 @@ text: "API response status: {{#http_node.status_code#}}"
 
 Position nodes on the canvas for visual clarity:
 
+**Layout Constants** (from Dify frontend):
+- `NODE_WIDTH`: 240 pixels
+- `X_OFFSET`: 60 pixels (horizontal spacing)
+- `NODE_WIDTH_X_OFFSET`: 300 pixels (node width + spacing)
+- `Y_OFFSET`: 39 pixels
+- `START_INITIAL_POSITION`: { x: 80, y: 282 }
+- `NODE_LAYOUT_HORIZONTAL_PADDING`: 60 pixels
+- `NODE_LAYOUT_VERTICAL_PADDING`: 60 pixels
+- `NODE_LAYOUT_MIN_DISTANCE`: 100 pixels
+
+**Container Node Padding**:
+- Iteration/Loop containers:
+  - top: 65, right: 16, bottom: 20, left: 16
+- Z-index for iteration/loop: 1 (container), 1002 (children)
+
 **Horizontal spacing**: 300-400 pixels between connected nodes
 **Vertical spacing**:
 - Same level: same y-coordinate
@@ -269,18 +472,73 @@ Position nodes on the canvas for visual clarity:
 
 **Example positions**:
 ```yaml
-Start: x=100, y=250
-LLM: x=400, y=250
-Code: x=700, y=250
-End: x=1000, y=250
+Start: x=80, y=282 # Initial position
+LLM: x=380, y=282  # Start + NODE_WIDTH_X_OFFSET
+Code: x=680, y=282
+End: x=980, y=282
 ```
 
 For branching:
 ```yaml
-If-else: x=400, y=300
-True branch: x=700, y=200
-False branch: x=700, y=400
+If-else: x=380, y=300
+True branch: x=680, y=200
+False branch: x=680, y=450
+Aggregator: x=980, y=300
 ```
+
+**Container nodes (Iteration/Loop)**:
+- Start node inside container: { x: 24, y: 68 } (relative to container)
+- Children nodes have `parentId` set to container ID
+- Children have higher z-index (1002) than container (1)
+
+See [references/node_positioning.md](references/node_positioning.md) for detailed layout patterns and formulas.
+
+## Visual Editor Integration
+
+The DSL you create is rendered in the Dify visual workflow editor built with React Flow.
+
+### How DSL Maps to UI
+
+**Nodes** → Visual blocks on canvas with:
+- Icon and title (from `type` and `title` fields)
+- Connection handles (based on node type and error_strategy)
+- Configuration panel (node-specific form in right sidebar)
+- Status indicators (running, succeeded, failed)
+
+**Edges** → Bezier curves connecting nodes with:
+- Visual styling based on state (hovering, selected, running)
+- Labels for branching paths (true/false, classification labels)
+- Color coding for success/fail branches
+
+**Viewport** → Canvas view settings:
+```yaml
+viewport:
+  x: 0      # Pan offset X
+  y: 0      # Pan offset Y
+  zoom: 1.0 # Zoom level (0.1 to 2.0)
+```
+
+### Frontend Component Architecture
+
+When your DSL is loaded into the editor:
+
+1. **WorkflowContextProvider** initializes Zustand store with nodes/edges
+2. **ReactFlow** renders the canvas with custom node components
+3. **BaseNode** wraps each node with common UI (handles, headers)
+4. **Panel System** shows configuration forms when node is selected
+5. **Hook System** manages draft auto-save and execution
+
+### UI Features Not in DSL
+
+These UI-only properties are managed by the frontend (don't include in DSL):
+
+- `_hovering`, `_connectedNodeIsHovering`: Mouse interaction state
+- `_connectedSourceHandleIds`, `_connectedTargetHandleIds`: Computed from edges
+- `_runningStatus`, `_singleRunningStatus`: Runtime execution state
+- `_isCandidate`: Temporary phantom node during connection drag
+- `selected`: Node selection state
+
+**Important**: Only include persistent properties in your DSL (id, type, title, position, configuration). Runtime UI state is computed by the editor.
 
 ## Error Handling Strategy
 
@@ -311,6 +569,14 @@ Dify supports multiple error handling strategies defined in the node configurati
 - Configurable retry logic with max retries and intervals
 - Defined in node's `retry_config` section
 - Useful for transient failures (network issues, rate limits)
+- **Supported on**: LLM, Tool, HTTP Request, Code nodes only
+
+**Retry Configuration Structure**:
+```yaml
+retry_config:
+  max_retries: 3        # Maximum retry attempts (default: 3)
+  retry_interval: 100   # Interval between retries in ms (default: 100)
+```
 
 ### Implementing Fail-Branch Error Handling
 
@@ -440,6 +706,26 @@ Serve as workflow entry points.
 - **Important**: Only ONE root node per workflow
 - **Constraint**: Standard start nodes and trigger nodes cannot coexist
 
+### Nodes That Support Output Variables
+
+The following node types can produce output variables that other nodes can reference:
+- Start, TriggerWebhook, TriggerPlugin
+- LLM, Agent
+- KnowledgeRetrieval
+- Code
+- TemplateTransform
+- HttpRequest
+- Tool
+- VariableAssigner, VariableAggregator
+- QuestionClassifier
+- ParameterExtractor
+- Iteration, Loop
+- DocumentExtractor (DocExtractor)
+- ListFilter (list-operator)
+- DataSource
+
+**Note**: Nodes not in this list (like if-else, end, answer) typically don't produce reusable output variables, though some may have limited internal state.
+
 ## Workflow Execution Model
 
 ### Execution Flow
@@ -469,6 +755,26 @@ Workflows progress through these states:
 - **PARTIAL_SUCCEEDED**: Completed with handled errors (via fail-branch or default-value)
 - **STOPPED**: Manually stopped or aborted
 - **PAUSED**: Waiting for human input (human-input node)
+
+### Node Running Status
+
+Individual nodes track their execution state with these statuses:
+- **NOT_START**: Node hasn't started execution yet
+- **WAITING**: Node is queued and waiting to execute
+- **LISTENING**: Node is listening for events (trigger nodes)
+- **RUNNING**: Node is currently executing
+- **SUCCEEDED**: Node completed successfully
+- **FAILED**: Node failed with unhandled error
+- **EXCEPTION**: Node failed but error was handled
+- **RETRY**: Node is retrying after failure
+- **STOPPED**: Node execution was stopped
+
+**Important UI State Properties** (runtime only, not in DSL):
+- `_runningStatus`: Current execution status
+- `_singleRunningStatus`: Status when running single node
+- `_waitingRun`: Node is queued for execution
+- `_retryIndex`: Current retry attempt number
+- `_isSingleRun`: Node is in single-run debug mode
 
 ### Best Practices for Execution
 
